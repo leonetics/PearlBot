@@ -144,7 +144,7 @@ public class PearlBotCommand extends Command {
                 String countStr = max > 0 ? list.size() + "/" + max : String.valueOf(list.size());
                 sb.append("**").append(resolveName(entry.getKey())).append("** (").append(countStr).append(")\n");
                 for (var ch : list) {
-                    sb.append("  - ||").append(ch.x).append(' ').append(ch.y).append(' ').append(ch.z).append("||\n");
+                    sb.append(" • ||").append(ch.x).append(' ').append(ch.y).append(' ').append(ch.z).append("||\n");
                 }
             }
             c.getSource().getEmbed()
