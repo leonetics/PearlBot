@@ -36,6 +36,7 @@ import org.pearlbot.module.EnderPearlTrackerModule;
 public class PearlBotPlugin implements ZenithProxyPlugin {
     public static PluginAPI API;
     public static PearlBotConfig PLUGIN_CONFIG;
+    public static PearlBotMessages PLUGIN_MESSAGES;
     public static ComponentLogger LOG;
 
     @Override
@@ -44,6 +45,7 @@ public class PearlBotPlugin implements ZenithProxyPlugin {
         LOG = pluginAPI.getLogger();
         LOG.info("PearlBot loading...");
         PLUGIN_CONFIG = API.registerConfig(BuildConstants.PLUGIN_ID, PearlBotConfig.class);
+        PLUGIN_MESSAGES = API.registerConfig(BuildConstants.PLUGIN_ID + "-messages", PearlBotMessages.class);
         API.registerModule(new EnderPearlTrackerModule());
         API.registerModule(new AutoPearlModule());
         API.registerCommand(new PearlBotCommand());

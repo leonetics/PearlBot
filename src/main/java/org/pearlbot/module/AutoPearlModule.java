@@ -46,6 +46,7 @@ import static com.zenith.Globals.CACHE;
 import static com.zenith.Globals.CONFIG;
 import static com.zenith.Globals.DISCORD;
 import static org.pearlbot.PearlBotPlugin.PLUGIN_CONFIG;
+import static org.pearlbot.PearlBotPlugin.PLUGIN_MESSAGES;
 
 public class AutoPearlModule extends Module {
     private static final long PULL_RETRY_INTERVAL_MS = 1_000L;
@@ -138,7 +139,7 @@ public class AutoPearlModule extends Module {
                 .count();
             int max = PLUGIN_CONFIG.maxChambersPerPlayer;
             String countStr = max > 0 ? count + "/" + max : String.valueOf(count);
-            sendWhisper(name, "You have " + countStr + " pearl(s) set.");
+            sendWhisper(name, PLUGIN_MESSAGES.format(PLUGIN_MESSAGES.pearlCount, "count", countStr));
             return;
         }
 
@@ -150,7 +151,7 @@ public class AutoPearlModule extends Module {
 
         PearlBotConfig.StasisChamber chamber = findChamberFor(uuid);
         if (chamber == null) {
-            sendWhisper(name, "No pearl found for you.");
+            sendWhisper(name, PLUGIN_MESSAGES.noPearlFound);
             return;
         }
 
@@ -159,19 +160,19 @@ public class AutoPearlModule extends Module {
 
     private void handleAuthWhisper(UUID mcUuid, String mcUsername, String code) {
         if (code.isBlank()) {
-            sendWhisper(mcUsername, "Usage: !auth <code> - get a code with !auth in Discord first.");
+            sendWhisper(mcUsername, PLUGIN_MESSAGES.authUsage);
             return;
         }
         purgeExpiredAuthCodes();
         PendingAuth pending = pendingAuthCodes.remove(code.toUpperCase());
         if (pending == null) {
-            sendWhisper(mcUsername, "Invalid or expired code.");
+            sendWhisper(mcUsername, PLUGIN_MESSAGES.authInvalidCode);
             return;
         }
         PLUGIN_CONFIG.linkedAccounts.put(mcUuid, new PearlBotConfig.LinkedAccount(
             pending.discordUserId, pending.discordUsername, mcUsername, System.currentTimeMillis()));
         info("Linked MC {} ({}) to Discord {} ({})", mcUsername, mcUuid, pending.discordUsername, pending.discordUserId);
-        sendWhisper(mcUsername, "Linked to Discord " + pending.discordUsername + ".");
+        sendWhisper(mcUsername, PLUGIN_MESSAGES.format(PLUGIN_MESSAGES.authLinked, "discordUsername", pending.discordUsername));
         notifyAuthSuccess(pending.discordUserId, mcUsername);
     }
 
@@ -184,7 +185,7 @@ public class AutoPearlModule extends Module {
             warn("Cannot send auth-success ping: channel {} not found", channelId);
             return;
         }
-        channel.sendMessage("<@" + discordUserId + "> Linked MC account `" + mcUsername + "`.").queue();
+        channel.sendMessage("<@" + discordUserId + "> " + PLUGIN_MESSAGES.format(PLUGIN_MESSAGES.discordAuthLinked, "mcUsername", mcUsername)).queue();
     }
 
     private void onDiscordMessage(MessageReceivedEvent jdaEvent) {
@@ -205,8 +206,7 @@ public class AutoPearlModule extends Module {
         if (firstWord.equals(DISCORD_AUTH_CMD)) {
             String code = newAuthCode(discordUserId, discordUsername);
             long ttl = (long) PLUGIN_CONFIG.discordTrigger.authCodeTtlMinutes;
-            channel.sendMessage("<@" + discordUserId + "> Whisper me `!auth " + code
-                + "` in-game from each MC account you want to link. Expires in " + ttl + " minutes.").queue();
+            channel.sendMessage("<@" + discordUserId + "> " + PLUGIN_MESSAGES.format(PLUGIN_MESSAGES.discordAuthCode, "code", code, "ttl", ttl)).queue();
             return;
         }
 
@@ -221,7 +221,7 @@ public class AutoPearlModule extends Module {
             .map(Map.Entry::getValue)
             .toList();
         if (linked.isEmpty()) {
-            channel.sendMessage("<@" + discordUserId + "> No MC accounts linked. Type `!auth` to link one.").queue();
+            channel.sendMessage("<@" + discordUserId + "> " + PLUGIN_MESSAGES.discordNoAccountsLinked).queue();
             return;
         }
 
@@ -229,8 +229,7 @@ public class AutoPearlModule extends Module {
             String names = linked.stream()
                 .map(a -> a.mcUsername != null ? a.mcUsername : "?")
                 .collect(java.util.stream.Collectors.joining(", "));
-            channel.sendMessage("<@" + discordUserId + "> Accounts linked: " + names
-                + ". Please type `" + triggerWordDiscord() + " <username>` to pull a specific account.").queue();
+            channel.sendMessage("<@" + discordUserId + "> " + PLUGIN_MESSAGES.format(PLUGIN_MESSAGES.discordMultipleAccounts, "accounts", names, "trigger", triggerWordDiscord())).queue();
             return;
         }
 
@@ -258,8 +257,7 @@ public class AutoPearlModule extends Module {
             String names = linked.stream()
                 .map(a -> a.mcUsername != null ? a.mcUsername : "?")
                 .collect(java.util.stream.Collectors.joining(", "));
-            channel.sendMessage("<@" + discordUserId + "> No linked account named `" + targetName
-                + "`. Accounts linked: " + names + ".").queue();
+            channel.sendMessage("<@" + discordUserId + "> " + PLUGIN_MESSAGES.format(PLUGIN_MESSAGES.discordAccountNotFound, "name", targetName, "accounts", names)).queue();
             return;
         }
 
@@ -326,8 +324,7 @@ public class AutoPearlModule extends Module {
         PearlBotConfig.StasisChamber chamber = findChamberFor(ownerUuid);
         if (chamber == null) return;
         if (name != null) {
-            sendWhisper(name, "You have " + count + " pearl(s) but the max is " + max
-                + "! Pulling your oldest pearl.");
+            sendWhisper(name, PLUGIN_MESSAGES.format(PLUGIN_MESSAGES.maxPearlsExceeded, "count", count, "max", max));
         }
         enqueuePull(ownerUuid, name, chamber);
     }
@@ -387,7 +384,7 @@ public class AutoPearlModule extends Module {
                 if (timeoutMs > 0 && now - activePullStartMs > timeoutMs) {
                     warn("Positioning for {} timed out after {}s; cancelling",
                         labelOf(activePull), PLUGIN_CONFIG.pullTimeoutSeconds);
-                    abortActivePull("Positioning timed out after " + PLUGIN_CONFIG.pullTimeoutSeconds + "s.");
+                    abortActivePull(PLUGIN_MESSAGES.format(PLUGIN_MESSAGES.pullTimedOut, "timeout", PLUGIN_CONFIG.pullTimeoutSeconds));
                     return;
                 }
             } else if (isOwnerOnline(activePull.ownerUuid)) {
@@ -397,8 +394,7 @@ public class AutoPearlModule extends Module {
                 if (waitMs > 0 && now - readyAtMs > waitMs) {
                     warn("{} did not come online within {}s; expiring pull",
                         labelOf(activePull), PLUGIN_CONFIG.waitForOwnerSeconds);
-                    abortActivePull("Expired - you did not log on within "
-                        + PLUGIN_CONFIG.waitForOwnerSeconds + "s.");
+                    abortActivePull(PLUGIN_MESSAGES.format(PLUGIN_MESSAGES.ownerTimedOut, "timeout", PLUGIN_CONFIG.waitForOwnerSeconds));
                     return;
                 }
             }
@@ -540,7 +536,7 @@ public class AutoPearlModule extends Module {
         int remaining = Math.max(0, remainingPearlsFor(pull.ownerUuid) - 1);
         if (pull.ownerName != null) {
             String tail = remaining == 1 ? "1 pearl" : remaining + " pearls";
-            sendWhisper(pull.ownerName, "Pulled. You have " + tail + " left.");
+            sendWhisper(pull.ownerName, PLUGIN_MESSAGES.format(PLUGIN_MESSAGES.pulled, "remaining", tail));
         }
 
         if (PLUGIN_CONFIG.idleGoal.enabled) {
