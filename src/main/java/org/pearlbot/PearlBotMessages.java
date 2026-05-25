@@ -60,6 +60,19 @@ public class PearlBotMessages {
     // {mcUsername} = the MC account that was linked
     public String discordAuthLinked = "Linked MC account `{mcUsername}`.";
 
+    // --- Discord multi-pull reply fragments (concatenated into one message) ---
+
+    // {names} = comma-separated accounts that were queued
+    public String discordQueued = "Queued: {names}. ";
+
+    // {names} = comma-separated accounts whose pull was already pending
+    public String discordAlreadyPending = "Already pending: {names}. ";
+
+    // {names} = comma-separated accounts with no registered chamber
+    public String discordNoChamber = "No chamber: {names}.";
+
+    public String discordNothingToPull = "Nothing to pull.";
+
     // Replaces {key} placeholders — pass alternating key, value pairs
     public String format(String template, Object... keyValues) {
         String result = template;

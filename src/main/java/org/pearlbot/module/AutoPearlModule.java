@@ -262,11 +262,11 @@ public class AutoPearlModule extends Module {
         }
 
         StringBuilder reply = new StringBuilder("<@").append(discordUserId).append("> ");
-        if (!queued.isEmpty()) reply.append("Queued: ").append(String.join(", ", queued)).append(". ");
-        if (!alreadyPending.isEmpty()) reply.append("Already pending: ").append(String.join(", ", alreadyPending)).append(". ");
-        if (!noChamber.isEmpty()) reply.append("No chamber: ").append(String.join(", ", noChamber)).append(".");
+        if (!queued.isEmpty()) reply.append(PLUGIN_MESSAGES.format(PLUGIN_MESSAGES.discordQueued, "names", String.join(", ", queued)));
+        if (!alreadyPending.isEmpty()) reply.append(PLUGIN_MESSAGES.format(PLUGIN_MESSAGES.discordAlreadyPending, "names", String.join(", ", alreadyPending)));
+        if (!noChamber.isEmpty()) reply.append(PLUGIN_MESSAGES.format(PLUGIN_MESSAGES.discordNoChamber, "names", String.join(", ", noChamber)));
         if (queued.isEmpty() && alreadyPending.isEmpty() && noChamber.isEmpty()) {
-            reply.append("Nothing to pull.");
+            reply.append(PLUGIN_MESSAGES.discordNothingToPull);
         }
         channel.sendMessage(reply.toString()).queue();
     }
