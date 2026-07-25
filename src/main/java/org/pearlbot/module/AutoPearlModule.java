@@ -73,6 +73,7 @@ public class AutoPearlModule extends Module {
     private static final long IDLE_RETURN_DELAY_MS = 1500L;
     private static final long GHOST_PRUNE_GRACE_MS = 5_000L;
     private static final long CLICK_CONFIRM_TIMEOUT_MS = 3_000L;
+    private static final long CLICK_SETTLE_DELAY_MS = 150L;
     private static final int FACE_TRAPDOOR_PRIORITY = 3000;
     private static final String DISCORD_AUTH_CMD = "!auth";
     private static final String INGAME_AUTH_CMD = "!auth";
@@ -90,6 +91,7 @@ public class AutoPearlModule extends Module {
     private long activePullStartMs = 0L;
     private volatile boolean readyAtTrapdoor = false;
     private volatile long readyAtMs = 0L;
+    private volatile long clickReadyAtMs = 0L;
     private long idleReturnAtMs = 0L;
 
     private int reopenStep = 0;
@@ -577,6 +579,12 @@ public class AutoPearlModule extends Module {
             } else if (!pearlPresentNear(activePull.blockX, activePull.blockY, activePull.blockZ)) {
                 abortForEmptyChamber(activePull);
                 return;
+            } else if (clickReadyAtMs > 0L) {
+                submitTrapdoorFacingRotation(activePull);
+                if (now >= clickReadyAtMs) {
+                    clickReadyAtMs = 0L;
+                    beginVerifiedClickAttempt(activePull);
+                }
             } else if (isOwnerOnline(activePull.ownerUuid)) {
                 fireClick();
             } else {
@@ -657,6 +665,7 @@ public class AutoPearlModule extends Module {
         activePullStartMs = 0L;
         readyAtTrapdoor = false;
         readyAtMs = 0L;
+        clickReadyAtMs = 0L;
         awaitingClickConfirmation = false;
         clickAttemptStartMs = 0L;
     }
@@ -789,6 +798,7 @@ public class AutoPearlModule extends Module {
         activePull = pull;
         activePullStartMs = System.currentTimeMillis();
         readyAtTrapdoor = false;
+        clickReadyAtMs = 0L;
 
         BARITONE.pathTo(new GoalNear(new BlockPos(tx, ty, tz), 9)).addExecutedListener(req -> {
             pf.allowBreak = prevAllowBreak;
@@ -802,12 +812,8 @@ public class AutoPearlModule extends Module {
             readyAtMs = System.currentTimeMillis();
 
             if (isOwnerOnline(pull.ownerUuid)) {
-                info("Ready at trapdoor for {} - owner online, interacting", label);
-                if (!pearlPresentNear(pull.blockX, pull.blockY, pull.blockZ)) {
-                    abortForEmptyChamber(pull);
-                } else {
-                    beginVerifiedClickAttempt(pull);
-                }
+                info("Ready at trapdoor for {} - owner online, settling before interact", label);
+                clickReadyAtMs = readyAtMs + CLICK_SETTLE_DELAY_MS;
             } else {
                 info("Ready at trapdoor for {} - waiting for owner online", label);
             }
