@@ -72,6 +72,9 @@ public class AutoPearlModule extends Module {
     private static final long PULL_RETRY_INTERVAL_MS = 1_000L;
     private static final long IDLE_RETURN_DELAY_MS = 1500L;
     private static final long GHOST_PRUNE_GRACE_MS = 5_000L;
+    private static final long CLICK_CONFIRM_TIMEOUT_MS = 3_000L;
+    private static final long CLICK_SETTLE_DELAY_MS = 150L;
+    private static final int FACE_TRAPDOOR_PRIORITY = 3000;
     private static final String DISCORD_AUTH_CMD = "!auth";
     private static final String INGAME_AUTH_CMD = "!auth";
     private static final String INGAME_LIST_CMD = "list";
@@ -88,11 +91,15 @@ public class AutoPearlModule extends Module {
     private long activePullStartMs = 0L;
     private volatile boolean readyAtTrapdoor = false;
     private volatile long readyAtMs = 0L;
+    private volatile long clickReadyAtMs = 0L;
     private long idleReturnAtMs = 0L;
 
     private int reopenStep = 0;
     private long reopenAtMs = 0L;
     private int reopenTx, reopenTy, reopenTz;
+
+    private volatile boolean awaitingClickConfirmation = false;
+    private volatile long clickAttemptStartMs = 0L;
 
     private final Map<UUID, Long> chamberEmptySinceMs = new HashMap<>();
 
@@ -491,8 +498,9 @@ public class AutoPearlModule extends Module {
 
     private void sendWhisper(String name, String message) {
         if (name == null || name.isBlank()) return;
-        String suffix = String.format("%08x", ThreadLocalRandom.current().nextInt());
-        sendClientPacketAsync(ChatUtil.getWhisperChatPacket(name, message + " - " + suffix));
+        String suffix = String.format("%016x", ThreadLocalRandom.current().nextLong())
+            + String.format("%08x", ThreadLocalRandom.current().nextInt());
+        sendClientPacketAsync(ChatUtil.getWhisperChatPacket(name, message + " [" + suffix + "]"));
     }
 
     public void checkAndEnforceMaxChambers(UUID ownerUuid) {
@@ -511,13 +519,6 @@ public class AutoPearlModule extends Module {
             sendWhisper(name, PLUGIN_MESSAGES.format(PLUGIN_MESSAGES.maxPearlsExceeded, "count", count, "max", max));
         }
         enqueuePull(ownerUuid, name, chamber, "max chambers exceeded");
-    }
-
-    private int remainingPearlsFor(UUID ownerUuid) {
-        if (ownerUuid == null) return 0;
-        return (int) PLUGIN_CONFIG.chambers.values().stream()
-            .filter(c -> ownerUuid.equals(c.ownerUuid))
-            .count();
     }
 
     public boolean enqueuePull(UUID ownerUuid, String requesterName, PearlBotConfig.StasisChamber chamber) {
@@ -567,21 +568,27 @@ public class AutoPearlModule extends Module {
                     abortActivePull(PLUGIN_MESSAGES.format(PLUGIN_MESSAGES.pullTimedOut, "timeout", PLUGIN_CONFIG.pullTimeoutSeconds));
                     return;
                 }
+            } else if (awaitingClickConfirmation) {
+                if (now - clickAttemptStartMs > CLICK_CONFIRM_TIMEOUT_MS) {
+                    warn("Interact confirmation for {} timed out after {}ms; reporting failure",
+                        labelOf(activePull), CLICK_CONFIRM_TIMEOUT_MS);
+                    if (BARITONE.isActive()) BARITONE.stop();
+                    abortActivePull(PLUGIN_MESSAGES.pullFailed);
+                    return;
+                }
             } else if (!pearlPresentNear(activePull.blockX, activePull.blockY, activePull.blockZ)) {
-                warn("Chamber for {} at ({}, {}, {}) is empty at the trapdoor; pruning and cancelling instead of clicking",
-                    labelOf(activePull), activePull.blockX, activePull.blockY, activePull.blockZ);
-                int cx = activePull.blockX, cy = activePull.blockY, cz = activePull.blockZ;
-                removeChamberAt(cx, cy, cz);
-                abortActivePull(PLUGIN_MESSAGES.chamberEmpty);
-                PLUGIN_CONFIG.pendingPulls.removeIf(p -> {
-                    if (p.blockX != cx || p.blockY != cy || p.blockZ != cz) return false;
-                    if (p.ownerName != null) sendWhisper(p.ownerName, PLUGIN_MESSAGES.chamberEmpty);
-                    return true;
-                });
+                abortForEmptyChamber(activePull);
                 return;
+            } else if (clickReadyAtMs > 0L) {
+                submitTrapdoorFacingRotation(activePull);
+                if (now >= clickReadyAtMs) {
+                    clickReadyAtMs = 0L;
+                    beginVerifiedClickAttempt(activePull);
+                }
             } else if (isOwnerOnline(activePull.ownerUuid)) {
                 fireClick();
             } else {
+                submitTrapdoorFacingRotation(activePull);
                 long waitMs = (long) PLUGIN_CONFIG.waitForOwnerSeconds * 1000L;
                 if (waitMs > 0 && now - readyAtMs > waitMs) {
                     warn("{} did not come online within {}s; expiring pull",
@@ -658,6 +665,9 @@ public class AutoPearlModule extends Module {
         activePullStartMs = 0L;
         readyAtTrapdoor = false;
         readyAtMs = 0L;
+        clickReadyAtMs = 0L;
+        awaitingClickConfirmation = false;
+        clickAttemptStartMs = 0L;
     }
 
     private boolean isChamberInRange(int x, int y, int z) {
@@ -739,6 +749,19 @@ public class AutoPearlModule extends Module {
         });
     }
 
+    private void abortForEmptyChamber(PearlBotConfig.PendingPull pull) {
+        warn("Chamber for {} at ({}, {}, {}) is empty at the trapdoor; pruning and cancelling instead of clicking",
+            labelOf(pull), pull.blockX, pull.blockY, pull.blockZ);
+        int cx = pull.blockX, cy = pull.blockY, cz = pull.blockZ;
+        removeChamberAt(cx, cy, cz);
+        abortActivePull(PLUGIN_MESSAGES.chamberEmpty);
+        PLUGIN_CONFIG.pendingPulls.removeIf(p -> {
+            if (p.blockX != cx || p.blockY != cy || p.blockZ != cz) return false;
+            if (p.ownerName != null) sendWhisper(p.ownerName, PLUGIN_MESSAGES.chamberEmpty);
+            return true;
+        });
+    }
+
     private void cancelPullsForChamber(PearlBotConfig.StasisChamber c) {
         if (activePull != null
             && activePull.blockX == c.x && activePull.blockY == c.y && activePull.blockZ == c.z) {
@@ -775,6 +798,7 @@ public class AutoPearlModule extends Module {
         activePull = pull;
         activePullStartMs = System.currentTimeMillis();
         readyAtTrapdoor = false;
+        clickReadyAtMs = 0L;
 
         BARITONE.pathTo(new GoalNear(new BlockPos(tx, ty, tz), 9)).addExecutedListener(req -> {
             pf.allowBreak = prevAllowBreak;
@@ -786,20 +810,69 @@ public class AutoPearlModule extends Module {
             }
             readyAtTrapdoor = true;
             readyAtMs = System.currentTimeMillis();
-            info("Ready at trapdoor for {} - {}",
-                label, isOwnerOnline(pull.ownerUuid) ? "owner online, clicking" : "waiting for owner online");
+
+            if (isOwnerOnline(pull.ownerUuid)) {
+                info("Ready at trapdoor for {} - owner online, settling before interact", label);
+                clickReadyAtMs = readyAtMs + CLICK_SETTLE_DELAY_MS;
+            } else {
+                info("Ready at trapdoor for {} - waiting for owner online", label);
+            }
         });
     }
 
+    /**
+     * Fast path: fires the moment an owner who was offline logs back in. Must not add
+     * latency here, so this skips InputManager/rightClickBlock's verification and just
+     * fires the packet directly - correctness instead comes from continuously re-facing
+     * the trapdoor throughout the wait via {@link #submitTrapdoorFacingRotation}.
+     */
     private void fireClick() {
         PearlBotConfig.PendingPull pull = activePull;
         if (pull == null) return;
+        sendUseItemOn(pull.blockX, pull.blockY, pull.blockZ);
+        completePullSuccess(pull);
+    }
+
+    /**
+     * Used when the owner was already online by the time positioning finished, so there's
+     * no live login event to react to and the extra tick or two rightClickBlock costs (it
+     * routes rotation+click through InputManager, applied on the next tick) doesn't matter.
+     * Unlike {@link #fireClick()}, this verifies the interact actually landed before
+     * declaring success.
+     */
+    private void beginVerifiedClickAttempt(PearlBotConfig.PendingPull pull) {
+        awaitingClickConfirmation = true;
+        clickAttemptStartMs = System.currentTimeMillis();
+        BARITONE.rightClickBlock(pull.blockX, pull.blockY, pull.blockZ).addExecutedListener(req -> {
+            if (activePull == null || !pull.ownerUuid.equals(activePull.ownerUuid)) return;
+            if (!awaitingClickConfirmation) return;
+            awaitingClickConfirmation = false;
+
+            if (req.getNow()) {
+                completePullSuccess(pull);
+            } else {
+                warn("Interact with trapdoor for {} could not be confirmed; reporting failure", labelOf(pull));
+                abortActivePull(PLUGIN_MESSAGES.pullFailed);
+            }
+        });
+    }
+
+    private void submitTrapdoorFacingRotation(PearlBotConfig.PendingPull pull) {
+        var rotation = RotationHelper.rotationTo(pull.blockX + 0.5, pull.blockY, pull.blockZ + 0.5);
+        INPUTS.submit(InputRequest.builder()
+            .owner(this)
+            .yaw(rotation.getX())
+            .pitch(rotation.getY())
+            .priority(FACE_TRAPDOOR_PRIORITY)
+            .build());
+    }
+
+    private void completePullSuccess(PearlBotConfig.PendingPull pull) {
         int tx = pull.blockX;
         int ty = pull.blockY;
         int tz = pull.blockZ;
         String label = labelOf(pull);
 
-        sendUseItemOn(tx, ty, tz);
         if (PLUGIN_CONFIG.reopenTrapdoors) {
             reopenTx = tx;
             reopenTy = ty;
@@ -819,8 +892,13 @@ public class AutoPearlModule extends Module {
         if (pull.source != null) pullEmbed.addField("Triggered by", pull.source);
         pullNotification(pullEmbed.successColor(), false);
 
-        // Chamber is still in the map until the entity despawns, so subtract 1 to compensate.
-        int remaining = Math.max(0, remainingPearlsFor(pull.ownerUuid) - 1);
+        // Don't rely on the pulled chamber having been removed from the map yet - the
+        // despawn packet that triggers removal races with this code. Exclude it by
+        // position explicitly instead of assuming it's (not) still present.
+        int remaining = (int) PLUGIN_CONFIG.chambers.values().stream()
+            .filter(c -> pull.ownerUuid.equals(c.ownerUuid))
+            .filter(c -> c.x != tx || c.y != ty || c.z != tz)
+            .count();
         if (pull.ownerName != null) {
             String tail = remaining == 1 ? "1 pearl" : remaining + " pearls";
             sendWhisper(pull.ownerName, PLUGIN_MESSAGES.format(PLUGIN_MESSAGES.pulled, "remaining", tail));

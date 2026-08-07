@@ -33,6 +33,8 @@ public class PearlBotMessages {
 
     public String ownerTimedOut = "Expired - you did not log on within {timeout}s.";
 
+    public String pullFailed = "Failed to pull your pearl - please try again.";
+
     public String authUsage = "Usage: !auth <code> - get a code by typing !auth in Discord first.";
     public String authInvalidCode = "Invalid or expired code.";
 
