@@ -9,7 +9,7 @@ A [ZenithProxy](https://github.com/rfresh2/ZenithProxy) plugin that pulls stasis
 - Discord ⇄ Minecraft account linking via short `!auth` codes (one Discord user → many MC accounts).
 - Whitelist for in-game whisper triggers.
 - AFK-return position after each pull.
-- Configurable per-player chamber cap — the bot warns the player and auto-pulls their oldest pearl when they exceed it.
+- Configurable per-player chamber cap — the bot warns the player and auto-pulls pearls to keep them at the cap.
 - Players can whisper `list` to check how many pearls they have set.
 
 ## Install
