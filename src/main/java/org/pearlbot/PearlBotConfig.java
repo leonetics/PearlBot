@@ -62,6 +62,20 @@ public class PearlBotConfig {
         public int radius = 3;
     }
 
+    public final Restock restock = new Restock();
+    public static class Restock {
+        public boolean enabled = false;
+        // Position of the chest / barrel / shulker box holding spare pearls.
+        public boolean containerSet = false;
+        public int x = 0;
+        public int y = 0;
+        public int z = 0;
+        // Restock when the bot holds fewer than this many pearls...
+        public int minPearls = 4;
+        // ...and withdraw until it holds about this many.
+        public int targetPearls = 16;
+    }
+
     public Map<UUID, StasisChamber> chambers = new LinkedHashMap<>();
     public static class StasisChamber {
         public int x;

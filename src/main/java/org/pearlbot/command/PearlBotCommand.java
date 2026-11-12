@@ -84,6 +84,12 @@ public class PearlBotCommand extends Command {
                 "unlink <player>",
                 "maxchambers <count>",
                 "pearldrop <on/off>",
+                "restock <on/off>",
+                "restock <x> <y> <z>",
+                "restock min <count>",
+                "restock target <count>",
+                "restock now",
+                "restock status",
                 "reopentrapdoors <on/off>",
                 "reopentrapdoors delay <ms>",
                 "stats",
@@ -524,6 +530,60 @@ public class PearlBotCommand extends Command {
                 return OK;
             })));
 
+        builder.then(literal("restock")
+            .then(argument("toggle", toggle()).executes(c -> {
+                PLUGIN_CONFIG.restock.enabled = getToggle(c, "toggle");
+                c.getSource().getEmbed().title("Pearl restock " + toggleStrCaps(PLUGIN_CONFIG.restock.enabled));
+                if (PLUGIN_CONFIG.restock.enabled && !PLUGIN_CONFIG.restock.containerSet) {
+                    c.getSource().getEmbed().description("No container set yet - use `pearlbot restock <x> <y> <z>`");
+                }
+                return OK;
+            }))
+            .then(literal("min")
+                .then(argument("count", integer(0)).executes(c -> {
+                    PLUGIN_CONFIG.restock.minPearls = getInteger(c, "count");
+                    c.getSource().getEmbed().title("Restock when below " + PLUGIN_CONFIG.restock.minPearls + " pearl(s)");
+                    return OK;
+                })))
+            .then(literal("target")
+                .then(argument("count", integer(1)).executes(c -> {
+                    PLUGIN_CONFIG.restock.targetPearls = getInteger(c, "count");
+                    c.getSource().getEmbed().title("Restock up to " + PLUGIN_CONFIG.restock.targetPearls + " pearl(s)");
+                    return OK;
+                })))
+            .then(literal("now").executes(c -> {
+                if (!PLUGIN_CONFIG.restock.containerSet) {
+                    c.getSource().getEmbed().title("No container set - use `pearlbot restock <x> <y> <z>`");
+                    return ERROR;
+                }
+                MODULE.get(AutoPearlModule.class).requestRestock();
+                c.getSource().getEmbed().title("Restock queued");
+                return OK;
+            }))
+            .then(literal("status").executes(c -> {
+                var r = PLUGIN_CONFIG.restock;
+                var mod = MODULE.get(AutoPearlModule.class);
+                c.getSource().getEmbed().title("Pearl Restock")
+                    .addField("Enabled", toggleStr(r.enabled))
+                    .addField("Container", r.containerSet ? "||" + r.x + " " + r.y + " " + r.z + "||" : "unset")
+                    .addField("Min / Target", r.minPearls + " / " + r.targetPearls)
+                    .addField("Bot Pearls", mod.countBotPearls())
+                    .addField("Restocking Now", mod.isRestocking() ? "yes" : "no");
+                return OK;
+            }))
+            .then(argument("x", integer())
+                .then(argument("y", integer())
+                    .then(argument("z", integer()).executes(c -> {
+                        PLUGIN_CONFIG.restock.x = getInteger(c, "x");
+                        PLUGIN_CONFIG.restock.y = getInteger(c, "y");
+                        PLUGIN_CONFIG.restock.z = getInteger(c, "z");
+                        PLUGIN_CONFIG.restock.containerSet = true;
+                        c.getSource().getEmbed().title("Restock container set")
+                            .description("||" + PLUGIN_CONFIG.restock.x + " " + PLUGIN_CONFIG.restock.y
+                                + " " + PLUGIN_CONFIG.restock.z + "||");
+                        return OK;
+                    })))));
+
         builder.then(literal("pearldrop")
             .then(argument("toggle", toggle()).executes(c -> {
                 PLUGIN_CONFIG.pearlDrop = getToggle(c, "toggle");
@@ -731,6 +791,8 @@ public class PearlBotCommand extends Command {
                 ? "unlimited" : String.valueOf(PLUGIN_CONFIG.maxChambersPerPlayer))
             .addField("Notifications", PLUGIN_CONFIG.notificationLevel.name().toLowerCase())
             .addField("Pearl Drop", toggleStr(PLUGIN_CONFIG.pearlDrop))
+            .addField("Restock", PLUGIN_CONFIG.restock.enabled && PLUGIN_CONFIG.restock.containerSet
+                ? "on (<" + PLUGIN_CONFIG.restock.minPearls + " -> " + PLUGIN_CONFIG.restock.targetPearls + ")" : "off")
             .addField("Reopen Trapdoors", PLUGIN_CONFIG.reopenTrapdoors
                 ? "on (" + PLUGIN_CONFIG.reopenTrapdoorsDelayMs + "ms)" : "off")
             .addField("Total Pulls", PLUGIN_CONFIG.playerStats.values().stream().mapToLong(s -> s.successful).sum())

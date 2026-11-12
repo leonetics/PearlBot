@@ -25,7 +25,9 @@ import com.zenith.event.chat.PublicChatEvent;
 import com.zenith.event.chat.WhisperChatEvent;
 import com.zenith.event.client.ClientBotTick;
 import com.zenith.feature.inventory.InventoryActionRequest;
+import com.zenith.feature.inventory.actions.CloseContainer;
 import com.zenith.feature.inventory.actions.DropItem;
+import com.zenith.feature.inventory.util.InventoryActionMacros;
 import com.zenith.feature.inventory.util.InventoryUtil;
 import com.zenith.feature.pathfinder.goals.GoalNear;
 import com.zenith.feature.whitelist.PlayerListsManager;
@@ -93,6 +95,20 @@ public class AutoPearlModule extends Module {
     private volatile long readyAtMs = 0L;
     private volatile long clickReadyAtMs = 0L;
     private long idleReturnAtMs = 0L;
+
+    private enum RestockState { IDLE, WALKING, OPENING, WITHDRAWING }
+    private static final long RESTOCK_WALK_TIMEOUT_MS = 60_000L;
+    private static final long RESTOCK_OPEN_TIMEOUT_MS = 5_000L;
+    private static final long RESTOCK_WITHDRAW_TIMEOUT_MS = 5_000L;
+    private static final long RESTOCK_RETRY_COOLDOWN_MS = 5 * 60_000L;
+    private static final long RESTOCK_SUCCESS_COOLDOWN_MS = 10_000L;
+    private static final int PEARL_STACK_SIZE = 16;
+    private volatile RestockState restockState = RestockState.IDLE;
+    private volatile long restockStateAtMs = 0L;
+    private volatile long restockCooldownUntilMs = 0L;
+    private volatile boolean restockRequested = false;
+    private volatile int restockContainerId = 0;
+    private volatile com.zenith.util.RequestFuture restockWithdrawFuture = null;
 
     private int reopenStep = 0;
     private long reopenAtMs = 0L;
@@ -600,6 +616,8 @@ public class AutoPearlModule extends Module {
             return;
         }
 
+        if (tickRestock(now)) return;
+
         if (idleReturnAtMs > 0 && now >= idleReturnAtMs && !BARITONE.isActive()) {
             startIdleReturn();
         }
@@ -626,6 +644,135 @@ public class AutoPearlModule extends Module {
 
     private String labelOf(PearlBotConfig.PendingPull pull) {
         return pull.ownerName == null ? pull.ownerUuid.toString() : pull.ownerName;
+    }
+
+    /** Queue a restock run on the next idle tick, ignoring the min-pearl threshold and cooldown. */
+    public void requestRestock() {
+        restockRequested = true;
+        restockCooldownUntilMs = 0L;
+    }
+
+    public boolean isRestocking() {
+        return restockState != RestockState.IDLE;
+    }
+
+    public int countBotPearls() {
+        if (CACHE == null) return 0;
+        var inv = CACHE.getPlayerCache().getInventoryCache().getPlayerInventory();
+        int total = 0;
+        // 9..44 = main inventory + hotbar, 45 = offhand
+        for (int i = 9; i < inv.getSize() && i <= 45; i++) {
+            var stack = inv.getItemStack(i);
+            if (stack != null && stack.getId() == ItemRegistry.ENDER_PEARL.id()) total += stack.getAmount();
+        }
+        return total;
+    }
+
+    /** @return true while a restock run owns the bot (pulls and idle return wait). */
+    private boolean tickRestock(long now) {
+        var cfg = PLUGIN_CONFIG.restock;
+        var invCache = CACHE.getPlayerCache().getInventoryCache();
+        switch (restockState) {
+            case IDLE -> {
+                if (!cfg.containerSet || (!cfg.enabled && !restockRequested)) return false;
+                if (!PLUGIN_CONFIG.pendingPulls.isEmpty()) return false; // pulls always come first
+                if (BARITONE.isActive()) return false;
+                Proxy proxy = Proxy.getInstance();
+                if (proxy == null || !proxy.isConnected() || proxy.isInQueue() || proxy.hasActivePlayer()) return false;
+                if (!restockRequested && now < restockCooldownUntilMs) return false;
+                int have = countBotPearls();
+                if (have >= cfg.targetPearls || (!restockRequested && have >= cfg.minPearls)) {
+                    restockRequested = false;
+                    return false;
+                }
+                if (!isChamberInRange(cfg.x, cfg.y, cfg.z)) {
+                    debug("Restock container at ({}, {}, {}) is not loaded; deferring", cfg.x, cfg.y, cfg.z);
+                    restockCooldownUntilMs = now + RESTOCK_SUCCESS_COOLDOWN_MS;
+                    return false;
+                }
+                info("Restocking pearls: have {}, target {} - walking to container at ({}, {}, {})",
+                    have, cfg.targetPearls, cfg.x, cfg.y, cfg.z);
+                idleReturnAtMs = 0L;
+                setRestockState(RestockState.WALKING, now);
+                BARITONE.rightClickBlock(cfg.x, cfg.y, cfg.z).addExecutedListener(f -> {
+                    if (restockState == RestockState.WALKING) {
+                        setRestockState(RestockState.OPENING, System.currentTimeMillis());
+                    }
+                });
+                return true;
+            }
+            case WALKING -> {
+                if (now - restockStateAtMs > RESTOCK_WALK_TIMEOUT_MS) {
+                    warn("Restock: could not reach container within {}s", RESTOCK_WALK_TIMEOUT_MS / 1000);
+                    if (BARITONE.isActive()) BARITONE.stop();
+                    finishRestock(false, now);
+                }
+                return true;
+            }
+            case OPENING -> {
+                int openId = invCache.getOpenContainerId();
+                if (openId != 0) {
+                    restockContainerId = openId;
+                    int need = Math.max(0, cfg.targetPearls - countBotPearls());
+                    int slots = Math.max(1, (need + PEARL_STACK_SIZE - 1) / PEARL_STACK_SIZE);
+                    var actions = InventoryActionMacros.withdraw(openId,
+                        stack -> stack.getId() == ItemRegistry.ENDER_PEARL.id(), slots);
+                    if (actions.isEmpty()) {
+                        warn("Restock: no ender pearls left in the container at ({}, {}, {})", cfg.x, cfg.y, cfg.z);
+                        closeRestockContainer();
+                        finishRestock(false, now);
+                        return true;
+                    }
+                    restockWithdrawFuture = INVENTORY.submit(InventoryActionRequest.builder()
+                        .owner(this)
+                        .actions(actions)
+                        .priority(3000)
+                        .build());
+                    setRestockState(RestockState.WITHDRAWING, now);
+                } else if (now - restockStateAtMs > RESTOCK_OPEN_TIMEOUT_MS) {
+                    warn("Restock: container at ({}, {}, {}) did not open", cfg.x, cfg.y, cfg.z);
+                    finishRestock(false, now);
+                }
+                return true;
+            }
+            case WITHDRAWING -> {
+                var f = restockWithdrawFuture;
+                boolean done = f == null || f.isCompleted();
+                if (done || now - restockStateAtMs > RESTOCK_WITHDRAW_TIMEOUT_MS) {
+                    closeRestockContainer();
+                    info("Restock finished: bot now holds {} pearl(s)", countBotPearls());
+                    finishRestock(true, now);
+                }
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void setRestockState(RestockState state, long now) {
+        restockState = state;
+        restockStateAtMs = now;
+    }
+
+    private void closeRestockContainer() {
+        int id = restockContainerId != 0
+            ? restockContainerId
+            : CACHE.getPlayerCache().getInventoryCache().getOpenContainerId();
+        restockContainerId = 0;
+        if (id == 0) return;
+        INVENTORY.submit(InventoryActionRequest.builder()
+            .owner(this)
+            .actions(new CloseContainer(id))
+            .priority(3000)
+            .build());
+    }
+
+    private void finishRestock(boolean success, long now) {
+        restockWithdrawFuture = null;
+        restockRequested = false;
+        restockCooldownUntilMs = now + (success ? RESTOCK_SUCCESS_COOLDOWN_MS : RESTOCK_RETRY_COOLDOWN_MS);
+        setRestockState(RestockState.IDLE, now);
+        idleReturnAtMs = now + IDLE_RETURN_DELAY_MS;
     }
 
     private void startIdleReturn() {

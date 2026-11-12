@@ -47,6 +47,21 @@ You can create stasis chambers by throwing your pearl down a bubble column. The 
 
 To limit how many chambers each player can have at once, use `pearlbot maxchambers <count>` (set to `0` for no limit). If a player exceeds the cap, the bot will whisper them a warning and automatically queue a pull for their oldest pearl.
 
+## Pearl restock
+
+With `pearlbot pearldrop on` the bot throws a pearl back after every pull. Restock keeps it supplied from a chest, barrel or shulker box:
+
+```
+pearlbot restock <x> <y> <z>   # block coords of the container
+pearlbot restock min 4         # restock when the bot holds fewer than 4 pearls
+pearlbot restock target 16     # withdraw until it holds about 16
+pearlbot restock on
+```
+
+When the bot is idle (no pulls queued, nobody controlling it) and below `min`, it walks to the container, opens it, shift-clicks pearl stacks into its inventory, closes it and returns to its idle position. Pulls always come first. If the container is empty or can't be reached, it retries after 5 minutes.
+
+`pearlbot restock now` forces a run, `pearlbot restock status` shows the settings and how many pearls the bot has.
+
 ## Discord Authentication
 
 For the Discord channel, the bot needs **Read Messages** + **Send Messages** in that channel, and **Message Content Intent** enabled in the Discord Developer Portal.
